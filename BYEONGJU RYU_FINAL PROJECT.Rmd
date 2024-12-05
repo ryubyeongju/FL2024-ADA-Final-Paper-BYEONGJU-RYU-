@@ -1,0 +1,237 @@
+---
+title: "ADA Final Project"
+author: "Byeongju Ryu"
+date: "2024-12-01"
+output: html_document
+---
+
+## README: Introduction
+I will use the 2016 Health and Retirement Study to answer two questions:
+  1. Is there an association between residential relocation and loneliness among community-dwelling adults aged 50 and over in the U.S.?
+  2. Does volunteer status moderate the assocation above?
+
+I used the cleaned dataset for the analyses. The HRS datasets are publicly available on the official HRS data (https://hrsdata.isr.umich.edu/). I used Stata/MP 18.5 to clean the dataset. If you have questions about data cleaning process, please contact: ryubyeongju@wustl.edu
+
+The variable names in the dataset are consistent with the HRS codebook (https://www.rand.org/well-being/social-and-behavioral-policy/portfolios/aging-longevity/dataprod/hrs-data.html).
+
+## Set the working directory
+```{r}
+setwd("/Users/ryu/Library/CloudStorage/Box-Box/HRS Projects/Relocation, volunteering, loneliness/data and dofile")
+```
+
+## Load the dataset
+```{r}
+# Load the library
+library(haven)
+
+# Load the dataset: We have 4,109 observations and 16 variables in this cleaned dataset.
+data <- read_dta ("HRS_cleaned.dta")
+
+# Display the first few rows of the dataset
+head(data)
+```
+
+## Look at the descriptive statistics
+```{r}
+# Load the libraries
+library(tableone)
+
+# List of categorical variables
+categorical_vars <- c(
+  "r13lblonely3_quintile_dummy4",    ## Loneliness (1 = Yes, 0 = No)
+  "r13relocation_region",            ## Relocation status (1 = Yes, 0 = No)
+  "r13fvolB",                        ## Volunteer status (1 = Yes, 0 = No)
+  "female",                          ## Gender (1 = Female, 0 = Male)
+  "race_binary",                     ## Race (1 = White, 0 = Non-White)
+  "r13married",                      ## Marital Status (1 = Married/Partnered, 0 = No)
+  "r13ivolB",                        ## Informally helping friends/neighbors/relatives (1 = Yes, 0 = No)
+  "r13urbrurB"                       ## Rurality (1 = Rural, 0 = Urban/Suburban)
+)
+
+# List of continuous variables
+continuous_vars <- c(
+  "raedyrs",                         ## Education (years)
+  "r13agey_b",                       ## Age (years)
+  "h13itot",                         ## Total household income (annual, $)
+  "r13adl5a",                        ## Number of ADL limitations (0-5)
+  "r13closechild_topcoded"           ## Number of close children (0-5)
+)
+
+# Combine all variables
+all_vars <- c(categorical_vars, continuous_vars)
+
+# Create the TableOne object
+summary_table <- CreateTableOne(vars = all_vars, data = data, factorVars = categorical_vars)
+
+# Print the table
+print(summary_table)
+```
+
+## Apply the HRS survey weights
+```{r}
+# Load survey package
+library(survey)
+
+# Define the survey design
+survey_design <- svydesign(
+  ids = ~hhid,              # Specify PSU (primary sampling unit: household)
+  weights = ~r13wtresp,     # Specify sampling weights
+  data = data               # Specify the dataset
+)
+
+# Print the survey design object to check
+summary(survey_design)
+#
+```
+
+## Define survey design with subpopulation
+```{r}
+# Define the subpopulation (where 'included' indicates the subpopulation)
+subpop_design <- subset(survey_design, included == 1)
+```
+
+## Run survey-weighted logistic regression (Research Question 1)
+```{r}
+# Convert variables to factors for categorical variables
+data$r13relocation_region <- factor(data$r13relocation_region)
+data$r13fvolB <- factor(data$r13fvolB)
+data$female <- factor(data$female)
+data$race_binary <- factor(data$race_binary)
+data$r13married <- factor(data$r13married)
+data$r13ivolB <- factor(data$r13ivolB)
+data$r13urbrurB <- factor(data$r13urbrurB)
+data$r13adl5a <- factor(data$r13adl5a)
+
+# Fit the logistic regression model
+logistic_model <- svyglm(
+  r13lblonely3_quintile_dummy4 ~ 
+    r13relocation_region + 
+    r13fvolB + 
+    r13agey_b + 
+    female + 
+    race_binary + 
+    raedyrs + 
+    r13married + 
+    h13itot + 
+    r13adl5a + 
+    r13closechild_topcoded + 
+    r13ivolB + 
+    r13urbrurB,
+  design = subpop_design,
+  family = quasibinomial()
+)
+
+# Display the summary of the logistic regression model
+summary(logistic_model)
+
+# Extract coefficients, confidence intervals, and p-values
+coefficients <- coef(logistic_model)
+conf_intervals <- confint(logistic_model)
+p_values <- summary(logistic_model)$coefficients[, "Pr(>|t|)"]
+
+# Combine into a single data frame
+results <- data.frame(
+  Variable = names(coefficients),
+  OddsRatio = exp(coefficients),
+  LowerCI = exp(conf_intervals[, 1]),
+  UpperCI = exp(conf_intervals[, 2]),
+  PValue = p_values
+)
+
+# Display results
+results
+```
+
+## Calculate the predicted probabilities (Research Question 1)
+```{r}
+# Load libraries
+library(margins)
+
+# Compute margins for r13relocation_region (relocation status)
+margins_region <- predicted_data %>%
+  group_by(r13relocation_region) %>%
+  summarise(
+    Margin = mean(predicted_prob, na.rm = TRUE),   # Average predicted probability
+    StdErr = sd(predicted_prob, na.rm = TRUE) / sqrt(n()), # Standard error
+    LowerCI = Margin - 1.96 * StdErr,             # Lower 95% confidence interval
+    UpperCI = Margin + 1.96 * StdErr              # Upper 95% confidence interval
+  )
+
+# Display margins for r13relocation_region (relocation status)
+print(margins_region)
+
+# Compute margins for r13fvolB (volunteer status)
+margins_volunteer <- predicted_data %>%
+  group_by(r13fvolB) %>%
+  summarise(
+    Margin = mean(predicted_prob, na.rm = TRUE),   # Average predicted probability
+    StdErr = sd(predicted_prob, na.rm = TRUE) / sqrt(n()), # Standard error
+    LowerCI = Margin - 1.96 * StdErr,             # Lower 95% confidence interval
+    UpperCI = Margin + 1.96 * StdErr              # Upper 95% confidence interval
+  )
+
+# Display margins for r13fvolB (volunteer status)
+print(margins_volunteer)
+```
+
+## Run survey-weighted logistic regression (Research Question 2)
+```{r}
+# Fit the logistic regression model with interaction terms
+logistic_model <- svyglm(
+  r13lblonely3_quintile_dummy4 ~ 
+    r13relocation_region * r13fvolB +  # Interaction term
+    r13agey_b + 
+    female + 
+    race_binary + 
+    raedyrs + 
+    r13married + 
+    h13itot + 
+    r13adl5a + 
+    r13closechild_topcoded + 
+    r13ivolB + 
+    r13urbrurB,
+  design = subpop_design,
+  family = quasibinomial()
+)
+
+# Display the model summary
+summary(logistic_model)
+
+# Extract coefficients, confidence intervals, and p-values
+coefficients <- coef(logistic_model)
+conf_intervals <- confint(logistic_model)
+p_values <- summary(logistic_model)$coefficients[, "Pr(>|t|)"]
+
+# Combine results into a data frame
+results <- data.frame(
+  Variable = names(coefficients),
+  OddsRatio = exp(coefficients),  # Exponentiate coefficients to get odds ratios
+  LowerCI = exp(conf_intervals[, 1]),  # Lower bound of confidence interval
+  UpperCI = exp(conf_intervals[, 2]),  # Upper bound of confidence interval
+  PValue = p_values  # P-values
+)
+
+# Display the results
+results
+
+```
+
+## Calculate the predicted probabilities (Research Question 2)
+```{r}
+# Generate predicted probabilities
+predicted_data <- data %>%
+  mutate(predicted_prob = predict(logistic_model, type = "response"))
+
+# Compute margins for the interaction term
+margins_interaction <- predicted_data %>%
+  group_by(r13relocation_region, r13fvolB) %>%
+  summarise(
+    Margin = mean(predicted_prob, na.rm = TRUE),
+    StdErr = sd(predicted_prob, na.rm = TRUE) / sqrt(n()),
+    LowerCI = Margin - 1.96 * StdErr,
+    UpperCI = Margin + 1.96 * StdErr
+  )
+
+# Display interaction margins
+print(margins_interaction)
+```
